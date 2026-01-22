@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WordGym 單字健身坊 — 教師版</title>
+    <title>WordGym 單字健身坊 — 學生版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       /* 控制 details 展開/收合符號 */
@@ -112,9 +112,9 @@
         showImporter: false,
         sheets: [
           {
-            name: '高中氣候單字',
+            name: '高中 6000 單-影片錄製管理',
             sheetId: '1srH8MGdTQbd0aSue9VE9wnED1_P-iTpgvTFz7C19uv4',
-            gid: '1317079750',
+            gid: '1416309962',
             theme: 'highschool_climate'
           }
         ]
@@ -139,7 +139,16 @@ const speak = (rawText) => {
           const response = await fetch(csvUrl);
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const csvText = await response.text();
+          
+          // 檢查是否返回 HTML 錯誤頁面（表示無法存取）
+          if (csvText.trim().startsWith('<!DOCTYPE html>') || csvText.includes('找不到網頁') || csvText.includes('無法開啟這個檔案')) {
+            throw new Error(`無法存取 Google Sheets "${sheetConfig.name}"：檔案可能不存在、已被刪除，或權限設為私人。請確認檔案已設為「知道連結的使用者」可檢視。`);
+          }
+          
           const rows = parseCSV(csvText);
+          if (!rows || rows.length === 0) {
+            throw new Error(`Google Sheets "${sheetConfig.name}" 沒有資料或格式不正確`);
+          }
           return { rows, theme: sheetConfig.theme };
         } catch (error) {
           console.error(`載入失敗: ${sheetConfig.name}`, error);
@@ -359,16 +368,46 @@ const speak = (rawText) => {
 
       const makeBaseDataset = () => [];
 
+      // 改進的 normalizePOS：將各種格式轉換為標準化標籤
       const normalizePOS = (raw) => {
-        const s=String(raw||"").toLowerCase();
-        if (s.includes("代名") || s.includes("pronoun")) return "pronoun";
-        if (s.includes("副詞") || s.includes("adv")) return "adverb";
-        if (s.includes("形容") || s.includes("adj")) return "adjective";
-        if (s.includes("動詞") || s.includes("verb") || s==="v") return "verb";
-        if (s.includes("名詞") || s.includes("noun") || s==="n") return "noun";
-        if (s.includes("介系") || s.includes("preposition") || s.includes("prep")) return "preposition";
-        if (s.includes("連接") || s.includes("conjunction") || s.includes("conj")) return "conjunction";
-        return "other";
+        const s = String(raw || "").trim();
+        if (!s) return null;
+        
+        // 處理括號格式，如 (n.), (adj.), (n./v.)
+        const bracketMatch = s.match(/^\(([^)]+)\)$/);
+        if (bracketMatch) {
+          const content = bracketMatch[1];
+          // 處理組合格式，如 n./v. 或 adj./n.
+          if (content.includes('/')) {
+            // 組合格式會在資料處理時特別處理，這裡只處理單一格式
+            const firstPart = content.split('/')[0].trim().replace(/\.$/, '');
+            const posMap = { 'n': 'noun', 'v': 'verb', 'adj': 'adjective', 'adv': 'adverb', 
+                           'prep': 'preposition', 'conj': 'conjunction', 'pron': 'pronoun',
+                           'art': 'article', 'aux': 'auxiliary' };
+            return posMap[firstPart.toLowerCase()] || null;
+          } else {
+            // 單一詞性，如 "adj."
+            const key = content.replace(/\.$/, '').toLowerCase();
+            const posMap = { 'n': 'noun', 'v': 'verb', 'adj': 'adjective', 'adv': 'adverb', 
+                           'prep': 'preposition', 'conj': 'conjunction', 'pron': 'pronoun',
+                           'art': 'article', 'aux': 'auxiliary' };
+            return posMap[key] || null;
+          }
+        }
+        
+        // 處理一般格式（後備檢查）
+        const lower = s.toLowerCase();
+        if (lower.includes("pronoun") || lower === "pron.") return "pronoun";
+        if (lower.includes("adverb") || lower.includes("adv")) return "adverb";
+        if (lower.includes("adjective") || lower.includes("adj")) return "adjective";
+        if (lower.includes("verb") || lower === "v") return "verb";
+        if (lower.includes("noun") || lower === "n") return "noun";
+        if (lower.includes("preposition") || lower.includes("prep")) return "preposition";
+        if (lower.includes("conjunction") || lower.includes("conj")) return "conjunction";
+        if (lower.includes("article") || lower === "art.") return "article";
+        if (lower.includes("auxiliary") || lower === "aux.") return "auxiliary";
+        
+        return null; // 無法識別時返回 null，而不是 "other"
       };
 
       const multiSplit = (text) => {
@@ -661,7 +700,12 @@ const speak = (rawText) => {
             themeOrderRef.current = counters;
 
             const next = replace ? [] : preparedCurrent;
-            const byWord = new Map(next.map((w) => [String(w.english_word || '').toLowerCase(), w]));
+            // 使用 level + english_word 作為唯一識別符，避免不同 level 的相同單字被合併
+            const byWord = new Map(next.map((w) => {
+              const level = String(w.level || '').trim();
+              const word = String(w.english_word || '').toLowerCase();
+              return [`${level}|${word}`, w];
+            }));
             let maxId = next.reduce((m, w) => Math.max(m, Number(w.id) || 0), 0);
 
             const mergeAffixInfo = (target, source) => {
@@ -691,15 +735,74 @@ const speak = (rawText) => {
               const english = String(raw.english_word || raw.word || raw.Word || raw['英文'] || raw['英文單字'] || '').trim();
               if (!english) return;
 
-              const posSources = [raw.posTags, raw.basic_pos, raw.grammar_main_category, raw['詞性'], raw['詞性分類'], raw.pos];
-              const tagTokens = [];
-              posSources.forEach((src) => {
-                if (!src) return;
-                if (Array.isArray(src)) tagTokens.push(...src);
-                else tagTokens.push(...multiSplit(src));
-              });
-              const tags = Array.from(new Set(tagTokens.map(normalizePOS).filter(Boolean)));
-              if (!tags.length) tags.push('other');
+              // 優先使用 Google Sheets 的原始詞性格式
+              const posRaw = raw['詞性'] || raw.posTags || raw.basic_pos || raw.grammar_main_category || raw['詞性分類'] || raw.pos;
+              let posDisplay = ''; // 用於顯示的原始格式（保留 Google Sheets 格式）
+              let tags = []; // 用於內部處理的標準化標籤
+              
+              if (posRaw) {
+                // 如果是陣列，檢查是否包含 Google Sheets 格式
+                if (Array.isArray(posRaw)) {
+                  // 尋找括號格式的項目
+                  const bracketFormat = posRaw.find(item => String(item).match(/^\([^)]+\)$/));
+                  if (bracketFormat) {
+                    posDisplay = String(bracketFormat).trim();
+                    // 提取內容並轉換為標準化標籤
+                    const content = posDisplay.match(/^\(([^)]+)\)$/)[1];
+                    if (content.includes('/')) {
+                      const parts = content.split('/').map(p => p.trim().replace(/\.$/, ''));
+                      const posMap = { 'n': 'noun', 'v': 'verb', 'adj': 'adjective', 'adv': 'adverb', 
+                                     'prep': 'preposition', 'conj': 'conjunction', 'pron': 'pronoun',
+                                     'art': 'article', 'aux': 'auxiliary' };
+                      tags = parts.map(p => posMap[p.toLowerCase()]).filter(Boolean);
+                    } else {
+                      const key = content.replace(/\.$/, '').toLowerCase();
+                      const posMap = { 'n': 'noun', 'v': 'verb', 'adj': 'adjective', 'adv': 'adverb', 
+                                     'prep': 'preposition', 'conj': 'conjunction', 'pron': 'pronoun',
+                                     'art': 'article', 'aux': 'auxiliary' };
+                      const tag = posMap[key];
+                      if (tag) tags = [tag];
+                    }
+                  } else {
+                    // 沒有括號格式，只處理 tags，不設置 posDisplay
+                    tags = posRaw.filter(t => t && t !== 'other');
+                    // posDisplay 保持為空字串，不設置
+                  }
+                } else {
+                  const posStr = String(posRaw).trim();
+                  // 檢查是否為 Google Sheets 格式（括號格式）
+                  if (posStr.match(/^\([^)]+\)$/)) {
+                    // 保留原始格式用於顯示，如 "(adj.)" 或 "(n./v.)"
+                    posDisplay = posStr;
+                    // 提取內容並轉換為標準化標籤用於內部處理
+                    const content = posStr.match(/^\(([^)]+)\)$/)[1];
+                    if (content.includes('/')) {
+                      // 組合格式，如 "n./v."
+                      const parts = content.split('/').map(p => p.trim().replace(/\.$/, ''));
+                      const posMap = { 'n': 'noun', 'v': 'verb', 'adj': 'adjective', 'adv': 'adverb', 
+                                     'prep': 'preposition', 'conj': 'conjunction', 'pron': 'pronoun',
+                                     'art': 'article', 'aux': 'auxiliary' };
+                      tags = parts.map(p => posMap[p.toLowerCase()]).filter(Boolean);
+                    } else {
+                      // 單一格式，如 "adj."
+                      const key = content.replace(/\.$/, '').toLowerCase();
+                      const posMap = { 'n': 'noun', 'v': 'verb', 'adj': 'adjective', 'adv': 'adverb', 
+                                     'prep': 'preposition', 'conj': 'conjunction', 'pron': 'pronoun',
+                                     'art': 'article', 'aux': 'auxiliary' };
+                      const tag = posMap[key];
+                      if (tag) tags = [tag];
+                    }
+                  } else {
+                    // 一般格式，只處理 tags，不設置 posDisplay（保持空字串）
+                    const tagTokens = multiSplit(posStr);
+                    const normalizedTags = tagTokens.map(normalizePOS).filter(Boolean);
+                    tags = Array.from(new Set(normalizedTags.filter(t => t !== 'other')));
+                    // posDisplay 保持為空字串，不設置
+                  }
+                }
+              }
+              
+              // 如果沒有有效的詞性，不加入 'other'，讓它保持空陣列
 
               const formsRaw = raw.word_forms ?? raw['詞性變化'];
               // 保留原始字串用於顯示，同時為 normalizeWordFormsDetail 準備陣列
@@ -724,7 +827,9 @@ const speak = (rawText) => {
                 kk_phonetic: raw.kk_phonetic || raw.KK || raw['KK音標'] || '',
                 chinese_definition: raw.chinese_definition || raw['中譯'] || raw['中文'] || '',
                 posTags: tags,
-                basic_pos: tags.join(', '),
+                posDisplay: posDisplay, // 保留 Google Sheets 原始格式用於顯示
+                // basic_pos 只用於內部處理，不影響顯示
+                basic_pos: posDisplay || tags.join(', '),
                 grammar_main_category: normalizePOS(tags[0] || raw.grammar_main_category || raw['詞性'] || ''),
                 grammar_sub_category: raw.grammar_sub_category || raw['詞性分類'] || '',
                 grammar_function: raw.grammar_function || raw['語法功能'] || '',
@@ -772,7 +877,8 @@ const speak = (rawText) => {
                 }
               });
 
-              const key = english.toLowerCase();
+              // 使用 level + english_word 作為唯一識別符
+              const key = `${level}|${english.toLowerCase()}`;
               const existing = byWord.get(key);
               if (existing) {
                 incoming.posTags.forEach((tag) => ensureTag(existing, tag));
@@ -782,6 +888,38 @@ const speak = (rawText) => {
                 if (level) existing.level = level;
                 applyThemeOrder(existing, combinedThemes, counters);
 
+                // 更新 posDisplay：優先使用 Google Sheets 原始格式
+                // 如果有 incoming 的 posDisplay（Google Sheets 格式），優先使用
+                if (incoming.posDisplay && incoming.posDisplay.match(/^\([^)]+\)$/)) {
+                  // 如果 incoming 有組合格式，直接使用
+                  if (incoming.posDisplay.includes('/')) {
+                    existing.posDisplay = incoming.posDisplay;
+                  } else if (!existing.posDisplay) {
+                    // 如果 existing 沒有 posDisplay，使用 incoming 的
+                    existing.posDisplay = incoming.posDisplay;
+                  } else if (existing.posDisplay.match(/^\([^)]+\)$/)) {
+                    // 如果 existing 和 incoming 都有單一格式，合併成組合格式
+                    const existingContent = existing.posDisplay.match(/^\(([^)]+)\)$/)?.[1];
+                    const incomingContent = incoming.posDisplay.match(/^\(([^)]+)\)$/)?.[1];
+                    if (existingContent && incomingContent && existingContent !== incomingContent) {
+                      const parts = [existingContent.replace(/\.$/, ''), incomingContent.replace(/\.$/, '')]
+                        .map(p => p.trim())
+                        .filter(Boolean);
+                      const order = ['n', 'v', 'adj', 'adv', 'prep', 'conj', 'pron', 'art', 'aux'];
+                      const sorted = Array.from(new Set(parts)).sort((a, b) => {
+                        const idxA = order.indexOf(a.toLowerCase());
+                        const idxB = order.indexOf(b.toLowerCase());
+                        return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+                      });
+                      if (sorted.length > 1) {
+                        existing.posDisplay = `(${sorted.join('./')}.)`;
+                      }
+                    }
+                  }
+                } else if (incoming.posDisplay && !existing.posDisplay) {
+                  // 如果 incoming 有 posDisplay（即使不是括號格式），且 existing 沒有，使用 incoming 的
+                  existing.posDisplay = incoming.posDisplay;
+                }
                 if (!existing.kk_phonetic && incoming.kk_phonetic) existing.kk_phonetic = incoming.kk_phonetic;
                 if (!existing.chinese_definition && incoming.chinese_definition) existing.chinese_definition = incoming.chinese_definition;
                 if (!existing.grammar_main_category && incoming.grammar_main_category) existing.grammar_main_category = incoming.grammar_main_category;
@@ -841,13 +979,17 @@ const speak = (rawText) => {
                   example_translation: incoming.example_translation || translationFor(english, firstPos)
                 });
                 newWord.posTags = incoming.posTags;
+                // posDisplay 已經在 incoming 中設置（從 Google Sheets 原始格式）
+                // basic_pos 用於內部處理，不影響顯示
                 newWord.basic_pos = incoming.posTags.join(', ');
                 if (!newWord.theme) newWord.theme = primaryTheme;
                 newWord.themes = mergeThemes(newWord.themes, newWord.theme);
                 applyThemeOrder(newWord, newWord.themes, counters);
                 if (incoming.affix_info) newWord.affix_info = incoming.affix_info;
                 next.push(newWord);
-                byWord.set(key, newWord);
+                // 使用 level + english_word 作為唯一識別符
+                const newKey = `${level}|${english.toLowerCase()}`;
+                byWord.set(newKey, newWord);
                 stats.added += 1;
               }
             });
@@ -1736,7 +1878,8 @@ const speak = (rawText) => {
                     </thead>
                     <tbody className="divide-y divide-gray-200">
                       {filtered.map((w) => {
-                        const posText = (w.posTags||[]).map(p=>POS_LABEL[p]||p).join('、') || '—';
+                        // 只使用 posDisplay（Google Sheets 原始格式），與 Google Sheets 完全一致
+                        const posText = w.posDisplay || '—';
                         const examples = [ensureLine(w.example_sentence), ensureLine(w.example_sentence_2)];
                         const translations = [ensureLine(w.example_translation), ensureLine(w.example_translation_2)];
                         const themeLabels = getThemeDisplayLabels(w);
@@ -1803,7 +1946,7 @@ const speak = (rawText) => {
               {list.map(w => (
                 <a key={w.id} href={`#/word/${w.id}`} className="block rounded-xl border p-3 hover:shadow">
                   <div className="font-semibold">{w.english_word}</div>
-                  <div className="text-xs text-gray-500">{(w.posTags||[]).join(', ')}</div>
+                  <div className="text-xs text-gray-500">{w.posDisplay || '—'}</div>
                 </a>
               ))}
             </div>
@@ -1813,7 +1956,7 @@ const speak = (rawText) => {
 
       const WordDetail = ({ id, data, favoritesApi, userExamplesApi, push, prevRoute }) => {
         const word = data.find((w) => String(w.id) === String(id));
-        const [selPos, setSelPos] = useState(word?.posTags?.[0] || "other");
+        const [selPos, setSelPos] = useState(word?.posTags?.find(tag => tag !== 'other') || word?.posTags?.[0] || null);
         const [mdPreview, setMdPreview] = useState('');
         const [mdStatus, setMdStatus] = useState('');
         const [showMdPreview, setShowMdPreview] = useState(false);
@@ -1957,14 +2100,15 @@ const speak = (rawText) => {
 
         useEffect(() => {
           if (!word) return;
-          const nextPos = Array.isArray(word.posTags) && word.posTags.length ? word.posTags[0] : 'other';
+          const nextPos = Array.isArray(word.posTags) && word.posTags.length ? word.posTags[0] : (word.posTags && word.posTags[0] !== 'other' ? word.posTags[0] : null);
           setSelPos(nextPos);
         }, [word?.id]);
 
         if (!word) return <div>找不到單字。</div>;
 
-        const posTags = Array.isArray(word.posTags) && word.posTags.length ? word.posTags : ['other'];
-        const posTextFull = posTags.map((tag) => POS_LABEL[tag] || tag);
+        const posTags = Array.isArray(word.posTags) && word.posTags.length ? word.posTags.filter(tag => tag !== 'other') : [];
+        // 只使用 posDisplay（Google Sheets 原始格式），與 Google Sheets 完全一致
+        const posTextFull = word.posDisplay ? [word.posDisplay] : [];
         const themeKeys = getWordThemes(word);
         const themeLabels = getThemeDisplayLabels(word);
         const primaryThemeLabel = themeLabels[0] || '—';
@@ -2181,7 +2325,8 @@ const speak = (rawText) => {
         // 構建標籤資料（包括新擴充的欄位）
         const tagData = [];
         if (levelText) tagData.push({ label: `Level ${levelText}`, color: 'bg-amber-50 text-amber-700' });
-        if (selPos) tagData.push({ label: POS_LABEL[selPos] || selPos, color: 'bg-indigo-50 text-indigo-700' });
+        // 只使用 posDisplay（Google Sheets 原始格式），與 Google Sheets 完全一致
+        if (word.posDisplay) tagData.push({ label: word.posDisplay, color: 'bg-indigo-50 text-indigo-700' });
         themeLabels.forEach(label => {
           tagData.push({ label, color: 'bg-gray-100 text-gray-700' });
         });
@@ -2232,17 +2377,12 @@ const speak = (rawText) => {
                 </div>
 
                 {/* 詞性切換（如果有多個詞性） */}
-                {posTags.length > 1 && (
+                {/* 只顯示 posDisplay（Google Sheets 格式），如果包含多個詞性會顯示組合格式如 "(n./v.)" */}
+                {word.posDisplay && word.posDisplay.includes('/') && (
                   <div className="flex flex-wrap gap-2">
-                    {posTags.map((tag) => (
-                      <button
-                        key={tag}
-                        onClick={() => setSelPos(tag)}
-                        className={`px-3 py-1 rounded-full border transition text-sm ${selPos === tag ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-400'}`}
-                      >
-                        {POS_LABEL[tag] || tag}
-                      </button>
-                    ))}
+                    <div className="px-3 py-1 rounded-full border bg-indigo-600 text-white border-indigo-600 text-sm">
+                      {word.posDisplay}
+                    </div>
                   </div>
                 )}
 
@@ -2593,7 +2733,7 @@ const speak = (rawText) => {
                 {items.map((w) => (
                   <div key={w.id} className="rounded-xl border p-3">
                     <a className="font-semibold hover:underline" href={`#/word/${w.id}`}>{w.english_word}</a>
-                    <div className="text-xs text-gray-500 mb-2">{(w.posTags||[]).join(', ')}</div>
+                    <div className="text-xs text-gray-500 mb-2">{w.posDisplay || '—'}</div>
                     <Button variant="ghost" onClick={()=>favoritesApi.remove(w.id)}>移除</Button>
                   </div>
                 ))}
