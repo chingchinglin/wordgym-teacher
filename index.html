@@ -29,6 +29,8 @@
       }
       .flashcard-front, .flashcard-back {
         position: absolute;
+        top: 0;
+        left: 0;
         width: 100%;
         height: 100%;
         backface-visibility: hidden;
@@ -136,9 +138,15 @@ const speak = (rawText) => {
       const loadFromGoogleSheet = async (sheetConfig) => {
         try {
           const csvUrl = `https://docs.google.com/spreadsheets/d/${sheetConfig.sheetId}/export?format=csv&gid=${sheetConfig.gid}`;
+          console.log(`嘗試載入 ${sheetConfig.name}:`, csvUrl);
           const response = await fetch(csvUrl);
+          console.log(`回應狀態: ${response.status} ${response.statusText}`);
+          
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const csvText = await response.text();
+          
+          console.log(`CSV 文字長度: ${csvText.length} 字元`);
+          console.log(`CSV 開頭: ${csvText.substring(0, 200)}`);
           
           // 檢查是否返回 HTML 錯誤頁面（表示無法存取）
           if (csvText.trim().startsWith('<!DOCTYPE html>') || csvText.includes('找不到網頁') || csvText.includes('無法開啟這個檔案')) {
@@ -146,10 +154,39 @@ const speak = (rawText) => {
           }
           
           const rows = parseCSV(csvText);
+          console.log(`解析結果: ${rows.length} 筆資料`);
+          
+          if (rows.length > 0) {
+            console.log('第一筆資料的欄位:', Object.keys(rows[0]));
+            console.log('第一筆資料:', rows[0]);
+            console.log('欄位值檢查:', {
+              'KK音標': rows[0]['KK音標'],
+              '中譯': rows[0]['中譯'],
+              '例句': rows[0]['例句'],
+              '翻譯': rows[0]['翻譯'],
+              'english_word': rows[0]['english_word'],
+              'level': rows[0]['level'],
+              '主題': rows[0]['主題']
+            });
+          }
+          
           if (!rows || rows.length === 0) {
             throw new Error(`Google Sheets "${sheetConfig.name}" 沒有資料或格式不正確`);
           }
-          return { rows, theme: sheetConfig.theme };
+          
+          // 為每一筆資料設定主題
+          const rowsWithTheme = rows.map(row => {
+            const themes = mergeThemes(row.themes, row['主題'], row['theme'], sheetConfig.theme);
+            const primaryTheme = themes.length ? themes[0] : sheetConfig.theme;
+            return {
+              ...row,
+              theme: primaryTheme || '',
+              themes: themes.length ? themes : [sheetConfig.theme].filter(Boolean),
+              default_theme: sheetConfig.theme
+            };
+          });
+          
+          return { rows: rowsWithTheme, theme: sheetConfig.theme };
         } catch (error) {
           console.error(`載入失敗: ${sheetConfig.name}`, error);
           throw error;
@@ -159,13 +196,24 @@ const speak = (rawText) => {
       const loadAllGoogleSheets = async () => {
         if (!GOOGLE_SHEET_CONFIG.enabled) return [];
         const results = [];
+        const errors = [];
         for (const sheetConfig of GOOGLE_SHEET_CONFIG.sheets) {
           try {
             const result = await loadFromGoogleSheet(sheetConfig);
             results.push(result);
           } catch (error) {
-            console.warn(`跳過: ${sheetConfig.name}`);
+            console.error(`載入失敗: ${sheetConfig.name}`, error);
+            errors.push({ name: sheetConfig.name, error: error.message });
           }
+        }
+        // 如果所有 sheets 都載入失敗，拋出錯誤
+        if (results.length === 0 && errors.length > 0) {
+          const errorMessages = errors.map(e => `${e.name}: ${e.error}`).join('\n');
+          throw new Error(`無法載入任何 Google Sheets：\n${errorMessages}`);
+        }
+        // 如果部分失敗，記錄警告但繼續
+        if (errors.length > 0) {
+          console.warn(`部分 Google Sheets 載入失敗:`, errors);
         }
         return results;
       };
@@ -732,6 +780,21 @@ const speak = (rawText) => {
 
             incomingList.forEach((raw) => {
               if (!raw) return;
+              
+              // 除錯：記錄第一筆資料的原始欄位
+              if (incomingList.indexOf(raw) === 0) {
+                console.log('=== 第一筆資料的原始欄位 ===');
+                console.log('所有欄位名稱:', Object.keys(raw));
+                console.log('欄位值範例:', {
+                  'KK音標': raw['KK音標'],
+                  '中譯': raw['中譯'],
+                  '例句': raw['例句'],
+                  '翻譯': raw['翻譯'],
+                  'english_word': raw['english_word'],
+                  'level': raw['level']
+                });
+              }
+              
               const english = String(raw.english_word || raw.word || raw.Word || raw['英文'] || raw['英文單字'] || '').trim();
               if (!english) return;
 
@@ -821,29 +884,72 @@ const speak = (rawText) => {
               const confusables = toList(raw.confusables, raw['易混淆字']);
 
               const affixSource = (raw.affix_info && typeof raw.affix_info === 'object') ? raw.affix_info : {};
+              // 更完整的欄位對應，處理各種可能的欄位名稱變體
+              const getField = (variants) => {
+                for (const variant of variants) {
+                  // 嘗試多種方式讀取欄位
+                  let value = raw[variant];
+                  if (value === undefined || value === null) {
+                    // 嘗試大小寫變體
+                    const lowerVariant = variant.toLowerCase();
+                    const upperVariant = variant.toUpperCase();
+                    value = raw[lowerVariant] || raw[upperVariant];
+                  }
+                  // 嘗試去除空格
+                  if (value === undefined || value === null) {
+                    const noSpaceVariant = variant.replace(/\s+/g, '');
+                    value = raw[noSpaceVariant];
+                  }
+                  // 嘗試所有可能的鍵（包含空格變體）
+                  if (value === undefined || value === null) {
+                    const allKeys = Object.keys(raw);
+                    const matchingKey = allKeys.find(key => 
+                      key.toLowerCase() === variant.toLowerCase() || 
+                      key.replace(/\s+/g, '') === variant.replace(/\s+/g, '')
+                    );
+                    if (matchingKey) value = raw[matchingKey];
+                  }
+                  
+                  if (value !== undefined && value !== null && String(value).trim() !== '') {
+                    const result = String(value).trim();
+                    // 除錯：記錄第一筆資料的欄位讀取情況
+                    if (incomingList.indexOf(raw) === 0 && variants[0] === 'kk_phonetic') {
+                      console.log(`欄位 "${variants[0]}" 讀取成功，值: "${result}"`);
+                    }
+                    return result;
+                  }
+                }
+                // 除錯：記錄第一筆資料的欄位讀取失敗
+                if (incomingList.indexOf(raw) === 0 && variants[0] === 'kk_phonetic') {
+                  console.log(`欄位 "${variants[0]}" 讀取失敗，嘗試的變體:`, variants);
+                  console.log('可用的欄位名稱:', Object.keys(raw));
+                }
+                return '';
+              };
+              
               const incoming = ensureWordFormsDetail({
                 id: null,
                 english_word: english,
-                kk_phonetic: raw.kk_phonetic || raw.KK || raw['KK音標'] || '',
-                chinese_definition: raw.chinese_definition || raw['中譯'] || raw['中文'] || '',
+                kk_phonetic: getField(['kk_phonetic', 'KK', 'KK音標', 'kk音標', 'KK音標 ']),
+                chinese_definition: getField(['chinese_definition', '中譯', '中文', '中文翻譯', 'definition']),
                 posTags: tags,
                 posDisplay: posDisplay, // 保留 Google Sheets 原始格式用於顯示
                 // basic_pos 只用於內部處理，不影響顯示
                 basic_pos: posDisplay || tags.join(', '),
-                grammar_main_category: normalizePOS(tags[0] || raw.grammar_main_category || raw['詞性'] || ''),
-                grammar_sub_category: raw.grammar_sub_category || raw['詞性分類'] || '',
-                grammar_function: raw.grammar_function || raw['語法功能'] || '',
-                applicable_sentence_pattern: raw.applicable_sentence_pattern || raw['句型'] || '',
-                example_sentence: raw.example_sentence || raw['例句'] || raw['ai例句'] || '',
-                example_translation: raw.example_translation || raw['翻譯'] || raw['ai例句中譯'] || '',
-                example_sentence_2: raw.example_sentence_2 || raw['例句2'] || raw['例句_2'] || raw.sentence2 || raw['GSAT_Example_Sentence_1'] || '',
-                example_translation_2: raw.example_translation_2 || raw['翻譯2'] || raw['翻譯_2'] || raw.translation2 || raw['GSAT_Translation_1'] || '',
-                example_sentence_3: raw.example_sentence_3 || raw['例句3'] || raw['例句_3'] || raw.sentence3 || '',
-                example_translation_3: raw.example_translation_3 || raw['翻譯3'] || raw['翻譯_3'] || raw.translation3 || '',
-                example_sentence_4: raw.example_sentence_4 || raw['例句4'] || raw['例句_4'] || raw.sentence4 || '',
-                example_translation_4: raw.example_translation_4 || raw['翻譯4'] || raw['翻譯_4'] || raw.translation4 || '',
-                example_sentence_5: raw.example_sentence_5 || raw['例句5'] || raw['例句_5'] || raw.sentence5 || '',
-                example_translation_5: raw.example_translation_5 || raw['翻譯5'] || raw['翻譯_5'] || raw.translation5 || '',
+                grammar_main_category: normalizePOS(tags[0] || getField(['grammar_main_category', '詞性', 'pos']) || ''),
+                grammar_sub_category: getField(['grammar_sub_category', '詞性分類', 'subcat']),
+                grammar_function: getField(['grammar_function', '語法功能']),
+                applicable_sentence_pattern: getField(['applicable_sentence_pattern', '句型']),
+                example_sentence: getField(['example_sentence', '例句', 'ai例句', 'example', 'sentence']),
+                example_translation: getField(['example_translation', '翻譯', 'ai例句中譯', 'translation', '中文翻譯']),
+                example_sentence_2: getField(['example_sentence_2', '例句2', '例句_2', 'sentence2', 'GSAT_Example_Sentence_1']),
+                example_translation_2: getField(['example_translation_2', '翻譯2', '翻譯_2', 'translation2', 'GSAT_Translation_1']),
+                example_sentence_3: getField(['example_sentence_3', '例句3', '例句_3', 'sentence3']),
+                example_translation_3: getField(['example_translation_3', '翻譯3', '翻譯_3', 'translation3']),
+                example_sentence_4: getField(['example_sentence_4', '例句4', '例句_4', 'sentence4']),
+                example_translation_4: getField(['example_translation_4', '翻譯4', '翻譯_4', 'translation4']),
+                example_sentence_5: getField(['example_sentence_5', '例句5', '例句_5', 'sentence5']),
+                example_translation_5: getField(['example_translation_5', '翻譯5', '翻譯_5', 'translation5']),
                 example_source_2: (() => {
                   // 優先使用已處理的 example_source_2
                   if (raw.example_source_2) return raw.example_source_2;
@@ -1622,8 +1728,12 @@ const speak = (rawText) => {
             console.log('目前資料數量:', data.length);
             console.log('Google Sheets 啟用:', GOOGLE_SHEET_CONFIG.enabled);
             
-            if (data.length > 0) {
-              console.log('已有資料，跳過載入');
+            // 檢查 URL 參數是否要求強制重新載入
+            const urlParams = new URLSearchParams(window.location.search);
+            const forceReload = urlParams.get('reload') === 'true';
+            
+            if (!forceReload && data.length > 0) {
+              console.log('已有資料，跳過載入（如需重新載入，請在網址後加上 ?reload=true）');
               return;
             }
             if (!GOOGLE_SHEET_CONFIG.enabled) {
@@ -1631,18 +1741,37 @@ const speak = (rawText) => {
               return;
             }
             
-            console.log('開始載入 Google Sheets...');
+            console.log('開始載入 Google Sheets...', forceReload ? '(強制重新載入)' : '');
             setIsLoading(true);
             setLoadError(null);
             
             try {
               const results = await loadAllGoogleSheets();
               console.log('載入結果:', results);
+              
+              if (results.length === 0) {
+                throw new Error('沒有成功載入任何 Google Sheets 資料。請確認 Google Sheets 已設為「知道連結的使用者」可檢視。');
+              }
+              
+              // 如果強制重新載入，先清除現有資料
+              if (forceReload) {
+                console.log('強制重新載入：清除現有資料');
+                onImport([], { overrideExamples: false, replace: true });
+              }
+              
               for (const { rows, theme } of results) {
                 console.log(`匯入 ${rows.length} 筆資料，主題:`, theme);
-                onImport(rows, theme);
+                if (rows.length > 0) {
+                  onImport(rows, { overrideExamples: true, replace: false });
+                }
               }
               console.log('載入完成！');
+              
+              // 移除 reload 參數
+              if (forceReload) {
+                const newUrl = window.location.pathname + window.location.hash;
+                window.history.replaceState({}, '', newUrl);
+              }
             } catch (error) {
               console.error('載入失敗:', error);
               setLoadError(error.message);
@@ -1753,9 +1882,32 @@ const speak = (rawText) => {
               <div className="mb-6 rounded-2xl border-2 border-red-200 bg-red-50 p-4">
                 <div className="text-lg font-semibold text-red-700 mb-2">❌ 載入失敗</div>
                 <div className="text-sm text-red-600 mb-3">{loadError}</div>
-                <div className="text-xs text-gray-600">
+                <div className="text-xs text-gray-600 mb-3">
                   請確認 Google Sheet 已設為「可檢視」或「發布至網路」
                 </div>
+                <Button 
+                  variant="ghost" 
+                  onClick={() => {
+                    window.location.href = window.location.pathname + window.location.hash + '?reload=true';
+                  }}
+                >
+                  重新載入 Google Sheets
+                </Button>
+              </div>
+            )}
+            
+            {/* 重新載入按鈕 */}
+            {!isLoading && !loadError && data.length > 0 && (
+              <div className="mb-4 text-right">
+                <Button 
+                  variant="ghost" 
+                  onClick={() => {
+                    window.location.href = window.location.pathname + window.location.hash + '?reload=true';
+                  }}
+                  className="text-sm"
+                >
+                  🔄 重新載入 Google Sheets
+                </Button>
               </div>
             )}
             
