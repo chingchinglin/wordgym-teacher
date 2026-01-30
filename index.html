@@ -867,7 +867,7 @@ const speak = (rawText) => {
               
               // 如果沒有有效的詞性，不加入 'other'，讓它保持空陣列
 
-              const formsRaw = raw.word_forms ?? raw['詞性變化'];
+              const formsRaw = raw.word_forms ?? raw['詞形變化'] ?? raw['詞性變化'];
               // 保留原始字串用於顯示，同時為 normalizeWordFormsDetail 準備陣列
               const formsForDetail = Array.isArray(formsRaw) ? formsRaw : multiSplit(formsRaw || '');
               const levelValue = raw.level ?? raw.Level ?? raw.LEVEL ?? raw['Level'] ?? raw['LEVEL'] ?? '';
@@ -2697,12 +2697,12 @@ const speak = (rawText) => {
                 <h2 className="text-xl font-bold text-gray-900 mb-4">詞性與關聯字</h2>
                 
                 <div className="space-y-6">
-                  {/* 詞性變化 */}
-                  {word.word_forms || word['詞性變化'] ? (
+                  {/* 詞形變化 */}
+                  {word.word_forms || word['詞形變化'] || word['詞性變化'] ? (
                     <div>
-                      <div className="text-sm font-semibold text-gray-500 mb-2">詞性變化</div>
+                      <div className="text-sm font-semibold text-gray-500 mb-2">詞形變化</div>
                       <div className="flex flex-wrap gap-2">
-                        {String(word.word_forms || word['詞性變化'] || '').split('\n').filter(line => line.trim()).map((line, idx) => (
+                        {String(word.word_forms || word['詞形變化'] || word['詞性變化'] || '').split('\n').filter(line => line.trim()).map((line, idx) => (
                           <span key={idx} className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-sm font-medium border border-indigo-200">
                             {line.trim()}
                           </span>
