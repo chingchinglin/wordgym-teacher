@@ -2730,42 +2730,60 @@ const speak = (rawText) => {
                     <div>
                       <div className="text-sm font-semibold text-gray-500 mb-2">同義／反義／易混淆</div>
                       <div className="grid gap-4 md:grid-cols-3">
-                        {synonyms.length > 0 && (
-                          <div>
-                            <div className="text-xs font-semibold text-gray-400 mb-2">同義字</div>
-                            <div className="flex flex-wrap gap-2">
-                              {synonyms.map((syn, idx) => (
-                                <span key={idx} className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-sm font-medium border border-blue-200">
-                                  {syn}
-                                </span>
-                              ))}
+                        {synonyms.length > 0 && (() => {
+                          const isTitle = (s) => /^[a-z]{1,4}\./.test(s) || /[\u4e00-\u9fff].*[\u4e00-\u9fff]/.test(s);
+                          const title = isTitle(synonyms[0]) ? synonyms[0] : null;
+                          const words = title ? synonyms.slice(1) : synonyms;
+                          return (
+                            <div>
+                              <div className="text-xs font-semibold text-gray-400 mb-1">同義字</div>
+                              {title && <div className="text-sm text-blue-700 font-medium mb-2">{title}</div>}
+                              <div className="flex flex-wrap gap-2">
+                                {words.map((syn, idx) => (
+                                  <span key={idx} className="px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 text-sm font-medium border border-blue-200">
+                                    {syn}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
-                        {antonyms.length > 0 && (
-                          <div>
-                            <div className="text-xs font-semibold text-gray-400 mb-2">反義字</div>
-                            <div className="flex flex-wrap gap-2">
-                              {antonyms.map((ant, idx) => (
-                                <span key={idx} className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-sm font-medium border border-rose-200">
-                                  {ant}
-                                </span>
-                              ))}
+                          );
+                        })()}
+                        {antonyms.length > 0 && (() => {
+                          const isTitle = (s) => /^[a-z]{1,4}\./.test(s) || /[\u4e00-\u9fff].*[\u4e00-\u9fff]/.test(s);
+                          const title = isTitle(antonyms[0]) ? antonyms[0] : null;
+                          const words = title ? antonyms.slice(1) : antonyms;
+                          return (
+                            <div>
+                              <div className="text-xs font-semibold text-gray-400 mb-1">反義字</div>
+                              {title && <div className="text-sm text-rose-700 font-medium mb-2">{title}</div>}
+                              <div className="flex flex-wrap gap-2">
+                                {words.map((ant, idx) => (
+                                  <span key={idx} className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-700 text-sm font-medium border border-rose-200">
+                                    {ant}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
-                        {confusables.length > 0 && (
-                          <div>
-                            <div className="text-xs font-semibold text-gray-400 mb-2">易混淆字</div>
-                            <div className="flex flex-wrap gap-2">
-                              {confusables.map((conf, idx) => (
-                                <span key={idx} className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-sm font-medium border border-amber-200">
-                                  {conf}
-                                </span>
-                              ))}
+                          );
+                        })()}
+                        {confusables.length > 0 && (() => {
+                          const isTitle = (s) => /^[a-z]{1,4}\./.test(s) || /[\u4e00-\u9fff].*[\u4e00-\u9fff]/.test(s);
+                          const title = isTitle(confusables[0]) ? confusables[0] : null;
+                          const words = title ? confusables.slice(1) : confusables;
+                          return (
+                            <div>
+                              <div className="text-xs font-semibold text-gray-400 mb-1">易混淆字</div>
+                              {title && <div className="text-sm text-amber-700 font-medium mb-2">{title}</div>}
+                              <div className="flex flex-wrap gap-2">
+                                {words.map((conf, idx) => (
+                                  <span key={idx} className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 text-sm font-medium border border-amber-200">
+                                    {conf}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
                     </div>
                   )}
